@@ -31,6 +31,25 @@ CAMPAIGNS = [
     (103, "Bridgerton_Brand_Awareness")
 ]
 
+# Study configurations: maps response value (1-4) to response_name
+STUDIES = {
+    1: {
+        "name": "Brand_Awareness_Study",
+        "question": "How aware are you of this brand?",
+        "response_names": {1: "Not Aware", 2: "Somewhat Aware", 3: "Aware", 4: "Very Aware"}
+    },
+    2: {
+        "name": "Brand_Affinity_Study",
+        "question": "How do you feel about this brand?",
+        "response_names": {1: "Dislike", 2: "Neutral", 3: "Like", 4: "Love"}
+    },
+    3: {
+        "name": "Purchase_Intent_Study",
+        "question": "How likely are you to purchase from this brand?",
+        "response_names": {1: "Very Unlikely", 2: "Unlikely", 3: "Likely", 4: "Very Likely"}
+    }
+}
+
 # 1. Generate Unique IP Pool
 ip_pool = [f"{random.randint(1, 255)}.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(0, 255)}" 
            for _ in range(NUM_UNIQUE_IPS)]
@@ -67,25 +86,44 @@ def generate_responses(impressions_df, n_responses=1000):
     # Get unique IPs from impressions to simulate 'Exposed' group
     exposed_ips = impressions_df['mock_ip_address'].unique()
     
+    # Build mapping of ip -> list of impression datetimes
+    ip_to_times = {}
+    for ip, times in impressions_df.groupby('mock_ip_address')['date_time']:
+        ip_to_times[ip] = [datetime.strptime(t, "%m/%d/%Y %H:%M:%S") for t in times]
+    
     # We want some survey takers to be 'Control' (didn't see the ad) 
     # and some 'Exposed' (saw the ad) to measure lift.
     responses = []
+    start_date = datetime(2025, 12, 1)
     
     # Mix of IPs: 70% exposed, 30% control (random new IPs)
     for i in range(n_responses):
         is_exposed = random.random() > 0.3
+        study_id = random.choice(list(STUDIES.keys()))
+        study_config = STUDIES[study_id]
+        
         if is_exposed:
             ip = random.choice(exposed_ips)
+            # Choose a random impression time for this IP and add 1-1440 minutes
+            base_time = random.choice(ip_to_times.get(ip, [start_date]))
+            response_time = base_time + timedelta(minutes=random.randint(1, 1440))
             # Simulate Lift: Exposed users more likely to give a 4 (Brand Love)
             val = np.random.choice([1, 2, 3, 4], p=[0.1, 0.2, 0.3, 0.4])
         else:
             ip = f"192.168.{random.randint(1, 255)}.{random.randint(1, 255)}"
+            # Random timestamp within December for control
+            response_time = start_date + timedelta(days=random.randint(0, 30), hours=random.randint(0, 23), minutes=random.randint(0, 59))
             # Control group: Lower probability of a 4
             val = np.random.choice([1, 2, 3, 4], p=[0.2, 0.3, 0.3, 0.2])
             
         responses.append({
             "mock_ip_address": ip,
-            "response_value": val
+            "response_value": val,
+            "response_name": study_config["response_names"][val],
+            "measurement_study_id": study_id,
+            "question": study_config["question"],
+            "date_time": response_time.strftime("%m/%d/%Y %H:%M:%S"),
+            "positive_response": val >= 3
         })
     return pd.DataFrame(responses)
 
