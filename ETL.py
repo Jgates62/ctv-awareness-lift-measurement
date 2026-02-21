@@ -84,7 +84,9 @@ response_ips = ", ".join([f"'{ip}'" for ip in df_responses["mock_ip_address"].un
 exposed_ip_q = f"""
 SELECT 
   mock_ip_address,
-  MIN(date_time) as first_imp_dt
+  MIN(date_time) as first_imp_dt,
+  sum(ad_cost) as ad_cost,
+  sum(CAST(is_imp AS INT64)) as impressions
 FROM `{PROJECT_ID}.{DATASET_ID}.impression_logs`
  WHERE 
   is_imp = TRUE
@@ -121,8 +123,19 @@ df_results['response_dt'] = pd.to_datetime(df_results['response_dt'])
 df_results['first_imp_dt'] = pd.to_datetime(df_results['first_imp_dt'])
 
 # Drop rows where the response occurred before or at the same time as first ad impression
-df_results = df_results[df_results['response_dt'] > df_results['first_imp_dt']]
-
+# Keeps rows where the condition is met OR where first_imp_dt is null
+df_results = df_results[
+    (df_results['response_dt'] >= df_results['first_imp_dt']) | 
+    (df_results['first_imp_dt'].isna())
+]
 print(f"Rows after filtering: {len(df_results):,}")
 
 df_results.to_csv("df_results.csv", index=False)
+
+# Load
+# Write df_results to BigQuery
+table_id = f"{PROJECT_ID}.{DATASET_ID}.lift_results"
+job_config = bigquery.LoadJobConfig(write_disposition="WRITE_APPEND") # Options: WRITE_TRUNCATE, WRITE_APPEND, WRITE_EMPTY
+job = client.load_table_from_dataframe(df_results, table_id, job_config=job_config)
+job.result()
+print(f"Loaded {job.output_rows} rows to {table_id}")

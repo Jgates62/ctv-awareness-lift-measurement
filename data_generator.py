@@ -14,7 +14,7 @@ os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.getenv("GOOGLE_APPLICATION_CRE
 project_id = os.getenv("PROJECT_ID")
 dataset_id = os.getenv("DATASET_ID")
 
-# Only run once to create dataset, then comment out or remove
+# Used to create dataset, leave commented out
 # client = bigquery.Client(project=project_id)
 # dataset = bigquery.Dataset(f"{project_id}.{dataset_id}")
 # dataset.location = "US"
@@ -23,8 +23,8 @@ dataset_id = os.getenv("DATASET_ID")
 
 
 # Configuration
-NUM_IMPRESSIONS = 10000
-NUM_UNIQUE_IPS = 5000
+NUM_IMPRESSIONS = 50000
+NUM_UNIQUE_IPS = 20000
 CAMPAIGNS = [
     (101, "Stranger_Things_S5_Launch"),
     (102, "Netflix_Standard_With_Ads_Promo"),
@@ -129,7 +129,7 @@ def generate_responses(impressions_df, n_responses=1000):
 
 # Execute
 df_impressions = generate_impression_logs(NUM_IMPRESSIONS)
-df_responses = generate_responses(df_impressions, 1200)
+df_responses = generate_responses(df_impressions, 15000)
 
 # Save to CSV
 df_impressions.to_csv("impression_logs.csv", index=False)
@@ -144,7 +144,7 @@ def write_to_bigquery(df, table_name):
         project_id=project_id,
         if_exists="replace"  # options: 'replace', 'append', 'fail'
     )
-    print(f"✅ Successfully wrote {len(df)} rows to {destination}")
+    print(f"Successfully wrote {len(df)} rows to {destination}")
 
 # Replace your to_csv() calls with:
 write_to_bigquery(df_impressions, "impression_logs")
