@@ -5,6 +5,7 @@ import numpy as np
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from google.cloud import bigquery
+import json
 
 
 load_dotenv()
@@ -25,30 +26,48 @@ dataset_id = os.getenv("DATASET_ID")
 # Configuration
 NUM_IMPRESSIONS = 50000
 NUM_UNIQUE_IPS = 20000
-CAMPAIGNS = [
-    (101, "Stranger_Things_S5_Launch"),
-    (102, "Netflix_Standard_With_Ads_Promo"),
-    (103, "Bridgerton_Brand_Awareness")
-]
 
 # Study configurations: maps response value (1-4) to response_name
 STUDIES = {
     1: {
         "name": "Brand_Awareness_Study",
         "question": "How aware are you of this brand?",
-        "response_names": {1: "Not Aware", 2: "Somewhat Aware", 3: "Aware", 4: "Very Aware"}
+        "response_names": {1: "Not Aware", 2: "Somewhat Aware", 3: "Aware", 4: "Very Aware"},
+        "campaigns": {101: "Brand Awareness VA", 102: "Brand Awareness NC"}
     },
     2: {
         "name": "Brand_Affinity_Study",
         "question": "How do you feel about this brand?",
-        "response_names": {1: "Dislike", 2: "Neutral", 3: "Like", 4: "Love"}
+        "response_names": {1: "Dislike", 2: "Neutral", 3: "Like", 4: "Love"},
+        "campaigns": {103: "National Brand Affinity"}
     },
     3: {
         "name": "Purchase_Intent_Study",
         "question": "How likely are you to purchase from this brand?",
-        "response_names": {1: "Very Unlikely", 2: "Unlikely", 3: "Likely", 4: "Very Likely"}
+        "response_names": {1: "Very Unlikely", 2: "Unlikely", 3: "Likely", 4: "Very Likely"},
+        "campaigns": {104: "Initial Awareness Campaign 18-24", 105: "Initial Awareness Campaign 25-34"}
     }
 }
+
+def generate_study_campaign_table(studies):
+    rows = []
+    for study_id, details in studies.items():
+        # Get the keys (IDs) directly as a list
+        campaign_ids = list(details.get("campaigns", {}).keys())
+        
+        row = {
+            "study_id": study_id,
+            "name": details["name"],
+            "question": details["question"],
+            "response_names": json.dumps(details["response_names"]),
+            # Store the full dict for reference
+            "campaigns_json": json.dumps(details["campaigns"]),
+            # New column: array of IDs for easy SQL filtering
+            "campaign_id_array": campaign_ids 
+        }
+        rows.append(row)
+    return pd.DataFrame(rows)
+df_study_campaigns = generate_study_campaign_table(STUDIES)
 
 # 1. Generate Unique IP Pool
 ip_pool = [f"{random.randint(1, 255)}.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(0, 255)}" 
@@ -59,8 +78,14 @@ def generate_impression_logs(n):
     data = []
     start_date = datetime(2025, 12, 1)
     
+    # Build a list of all (campaign_id, campaign_name) pairs from STUDIES
+    campaign_pairs = []
+    for study in STUDIES.values():
+        for camp_id, camp_name in study["campaigns"].items():
+            campaign_pairs.append((camp_id, camp_name))
+
     for _ in range(n):
-        camp_id, camp_name = random.choice(CAMPAIGNS)
+        camp_id, camp_name = random.choice(campaign_pairs)
         # Random timestamp within December
         dt = start_date + timedelta(days=random.randint(0, 30), hours=random.randint(0, 23), minutes=random.randint(0, 59))
         
@@ -134,8 +159,10 @@ df_responses = generate_responses(df_impressions, 15000)
 # Save to CSV
 df_impressions.to_csv("impression_logs.csv", index=False)
 df_responses.to_csv("responses.csv", index=False)
-
+df_study_campaigns.to_csv("study_campaigns.csv", index=False)
+	
 print(f"Success! Generated {len(df_impressions)} impressions and {len(df_responses)} responses.")
+# print(f"Success! Generated {len(df_impressions)} impressions, {len(df_responses)} responses, and {len(df_study_campaigns)} study-campaign rows.")
 
 def write_to_bigquery(df, table_name):
     destination = f"{project_id}.{dataset_id}.{table_name}"
@@ -146,6 +173,7 @@ def write_to_bigquery(df, table_name):
     )
     print(f"Successfully wrote {len(df)} rows to {destination}")
 
-# Replace your to_csv() calls with:
+# Write dataframes to BigQuery tables
 write_to_bigquery(df_impressions, "impression_logs")
 write_to_bigquery(df_responses, "survey_responses")
+write_to_bigquery(df_study_campaigns, "study_campaigns")
