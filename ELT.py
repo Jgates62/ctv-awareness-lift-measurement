@@ -34,7 +34,7 @@ client = bigquery.Client(project=PROJECT_ID)
 # 1. Configuration & Metadata Retrieval
 # -------------------------------------------------------------------------
 # Target study for analysis. In a production workflow, this could be passed via an orchestrator.
-study_id = 1 
+study_id = 3
 
 # Get campaign ids for the current study from the study_campaigns BQ table, 
 # allowing us to isolate specific ad spend related to the brand study.
@@ -64,11 +64,14 @@ print(f"Processing Study {study_id} for Campaigns: {campaign_ids}")
 # 2. Data Processing & Transformation Logic
 # -------------------------------------------------------------------------
 
-# We use Common Table Expressions (CTEs) to maintain readability and modularity.
+# Common Table Expressions (CTEs) used here to maintain readability and modularity.
+# RankedResponses: Deduplicates responses by taking the earliest timestamp per IP.
+# FirstResponses: Selects only the first (earliest) response per IP.
+# ImpressionStats: Aggregates ad exposure data at the IP level, calculates 'first_imp_dt' for exposure timing.
+# Final Join Logic: LEFT JOIN preserves all survey respondents. The join condition 'r.response_dt >= i.first_imp_dt' ensures correct exposed/control categorization.
+# Labeling logic: IF(i.mock_ip_address IS NOT NULL, TRUE, FALSE) labels exposed/control for downstream BI.
 sql_elt_q = f"""
 WITH RankedResponses AS (
-    -- Deduplicating responses: In case of multiple survey entries per IP, 
-    -- we take the earliest timestamp as the primary data point.
     SELECT
         measurement_study_id,
         mock_ip_address,
@@ -88,24 +91,16 @@ FirstResponses AS (
     SELECT * FROM RankedResponses WHERE entry_ranking = 1
 ),
 ImpressionStats AS (
-    -- Aggregating ad exposure data at the IP level.
-    -- We calculate 'first_imp_dt' to validate exposure timing relative to the survey.
     SELECT 
         mock_ip_address,
         MIN(PARSE_DATETIME('%m/%d/%Y %H:%M:%S', date_time)) AS first_imp_dt,
-        SUM(ad_cost) AS total_ad_spend,
-        SUM(CAST(is_imp AS INT64)) AS total_impressions
+        SUM(ad_cost) AS ad_cost,
+        SUM(CAST(is_imp AS INT64)) AS impressions
     FROM `{PROJECT_ID}.{DATASET_ID}.impression_logs`
     WHERE is_imp = TRUE 
       AND ad_campaign_id IN UNNEST(@campaign_ids)
     GROUP BY mock_ip_address
 )
-
--- Final Join Logic:
--- We use a LEFT JOIN to preserve all survey respondents.
--- The join condition 'r.response_dt >= i.first_imp_dt' is critical.
--- It ensures that if a user saw an ad AFTER taking the survey, they are 
--- correctly categorized as 'Control' (exposed=FALSE) for that specific study.
 SELECT 
     r.measurement_study_id,
     r.mock_ip_address,
@@ -115,10 +110,9 @@ SELECT
     r.positive_response,
     r.question,
     i.first_imp_dt,
-    i.total_ad_spend,
-    i.total_impressions,
-    -- Labeling logic for downstream BI (Exposed vs. Control)
-    IF(i.mock_ip_address IS NOT NULL, TRUE, FALSE) AS is_exposed,
+    i.ad_cost,
+    i.impressions,
+    IF(i.mock_ip_address IS NOT NULL, TRUE, FALSE) AS exposed,
     CURRENT_DATETIME() AS processed_at
 FROM FirstResponses r
 LEFT JOIN ImpressionStats i 
@@ -133,7 +127,7 @@ table_id = f"{PROJECT_ID}.{DATASET_ID}.lift_results"
 
 job_config = bigquery.QueryJobConfig(
     destination=table_id,
-    write_disposition="WRITE_TRUNCATE", # Options: WRITE_TRUNCATE, WRITE_APPEND, WRITE_EMPTY
+    write_disposition="WRITE_APPEND", # Options: WRITE_TRUNCATE, WRITE_APPEND, WRITE_EMPTY
     query_parameters=[
         bigquery.ScalarQueryParameter("study_id", "INT64", study_id),
         bigquery.ArrayQueryParameter("campaign_ids", "INT64", campaign_ids)
